@@ -118,10 +118,60 @@ def analyze_population(pop: str, labels: pd.DataFrame, aims: pd.DataFrame, genot
     if geno.empty:
         raise ValueError("no genotype data for population")
 
+    # Ensure AIM positions appear in the expected order
+    geno = geno.set_index("pos").loc[pop_positions]
+    positions = geno.index.tolist()
+
     pop_outdir = outdir / pop
     pop_outdir.mkdir(parents=True, exist_ok=True)
 
-    # Pool genotype values across all AIM positions and samples.
+    # Plot genotype values for each sample across AIM positions and fit individual distributions
+    sample_results = {}
+    fig_all, ax_all = plt.subplots()
+    for sample in samples:
+        vals = pd.to_numeric(geno[sample], errors="coerce").to_numpy()
+        idx = np.arange(len(positions))
+        mask = ~np.isnan(vals)
+        vals = vals[mask]
+        idx_masked = idx[mask]
+        if vals.size == 0:
+            sample_results[sample] = {"error": "no genotype values"}
+            continue
+
+        best_name_s, _, params_s = fit_distributions(vals)
+
+        fig, ax = plt.subplots()
+        ax.plot(idx_masked, vals, marker="o")
+        ax.set_xticks(idx)
+        ax.set_xticklabels(positions, rotation=90, fontsize=6)
+        ax.set_xlabel("AIM position")
+        ax.set_ylabel("Genotype value")
+        ax.set_title(f"{sample} values in {pop} AIMs")
+        fig.tight_layout()
+        sample_plot = pop_outdir / f"{sample}_values.png"
+        fig.savefig(sample_plot)
+        plt.close(fig)
+
+        ax_all.plot(idx_masked, vals, marker="o", alpha=0.3)
+
+        sample_results[sample] = {
+            "distribution": best_name_s,
+            "params": params_s,
+            "plot": str(sample_plot),
+            "values": int(vals.size),
+        }
+
+    ax_all.set_xticks(np.arange(len(positions)))
+    ax_all.set_xticklabels(positions, rotation=90, fontsize=6)
+    ax_all.set_xlabel("AIM position")
+    ax_all.set_ylabel("Genotype value")
+    ax_all.set_title(f"{pop} sample genotype values")
+    fig_all.tight_layout()
+    all_plot_path = pop_outdir / "all_sample_values.png"
+    fig_all.savefig(all_plot_path)
+    plt.close(fig_all)
+
+    # Pool genotype values across all AIM positions and samples for population-level distribution
     values = pd.to_numeric(geno[samples], errors="coerce").to_numpy().ravel()
     values = values[~np.isnan(values)]
     if values.size == 0:
@@ -147,7 +197,7 @@ def analyze_population(pop: str, labels: pd.DataFrame, aims: pd.DataFrame, genot
     plt.close(fig)
 
     # Build genotype sequence distribution for the population.
-    sample_vectors = geno.set_index("pos")[samples].T
+    sample_vectors = geno[samples].T
     seq_counts = (
         sample_vectors.apply(lambda r: ",".join(map(str, r.values)), axis=1)
         .value_counts()
@@ -160,6 +210,8 @@ def analyze_population(pop: str, labels: pd.DataFrame, aims: pd.DataFrame, genot
         "plot": str(plot_path),
         "values": int(values.size),
         "sequence_counts": seq_counts,
+        "sample_results": sample_results,
+        "all_samples_plot": str(all_plot_path),
     }
 
 
