@@ -134,7 +134,7 @@ def analyze_population(pop: str, labels: pd.DataFrame, aims: pd.DataFrame,
     if make_plots:
         fig_all, ax_all = plt.subplots()
     for sample in samples:
-        vals = pd.to_numeric(geno[sample], errors="coerce").to_numpy()
+        vals = pd.to_numeric(geno[sample].to_numpy(), errors="coerce")
         idx = np.arange(len(positions))
         mask = ~np.isnan(vals)
         vals = vals[mask]
@@ -183,7 +183,7 @@ def analyze_population(pop: str, labels: pd.DataFrame, aims: pd.DataFrame,
         all_plot_path = None
 
     # Pool genotype values across all AIM positions and samples for population-level distribution
-    values = pd.to_numeric(geno[samples], errors="coerce").to_numpy().ravel()
+    values = pd.to_numeric(geno[samples].to_numpy().ravel(), errors="coerce")
     values = values[~np.isnan(values)]
     if values.size == 0:
         raise ValueError("no genotype values to fit")
