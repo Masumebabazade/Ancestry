@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
-"""Analyze per-sample genotype distributions for population-specific AIM positions.
+"""Analyze genotype distributions for population-specific AIM positions.
 
 This script loads genotype data, AIM positions, and sample labels to
-identify the best-fitting statistical distribution for genotype values of
-each sample in specific populations at their ancestry-informative markers (AIMs).
+identify the best-fitting statistical distribution for the genotype values
+observed across all *samples* in a population at each ancestry-informative
+marker (AIM) position.  In addition to per-position fits, the script
+records the empirical frequency of complete genotype sequences for the
+population, which can be used to synthesise new samples or estimate the
+probability of existing ones.
 
 Usage example:
     python analyze_aims.py --genotypes head_train_samples.csv --aims G_const_infs.csv --labels train1.labels
@@ -112,12 +116,14 @@ def analyze_population(pop: str, labels: pd.DataFrame, aims: pd.DataFrame, genot
 
     pop_outdir = outdir / pop
     pop_outdir.mkdir(parents=True, exist_ok=True)
-    sample_results = {}
-    for sample in samples:
-        vals = geno[sample].values
+
+    position_results = {}
+    for _, row in geno.iterrows():
+        position = row["pos"]
+        vals = row[samples].values
         vals = vals[~np.isnan(vals)]
         if vals.size == 0:
-            sample_results[sample] = {"error": "no genotype values"}
+            position_results[position] = {"error": "no genotype values"}
             continue
         best_name, dist_obj, params = fit_distributions(vals)
         fig, ax = plt.subplots()
@@ -129,20 +135,29 @@ def analyze_population(pop: str, labels: pd.DataFrame, aims: pd.DataFrame, genot
         else:
             x = np.linspace(vals.min(), vals.max(), 100)
             ax.plot(x, dist_obj.pdf(x), "r-", label=f"{best_name} fit")
-        ax.set_title(f"{pop} {sample} genotype distribution")
+        ax.set_title(f"{pop} {position} genotype distribution")
         ax.set_xlabel("Genotype value")
         ax.set_ylabel("Density")
         ax.legend()
-        plot_path = pop_outdir / f"{sample}_distribution.png"
+        plot_path = pop_outdir / f"{position}_distribution.png"
         fig.savefig(plot_path)
         plt.close(fig)
-        sample_results[sample] = {
+        position_results[position] = {
             "distribution": best_name,
             "params": params,
             "plot": str(plot_path),
-            "values": len(vals),
+            "values": int(vals.size),
         }
-    return sample_results
+
+    # Build genotype sequence distribution for the population.
+    sample_vectors = geno.set_index("pos")[samples].T
+    seq_counts = (
+        sample_vectors.apply(lambda r: ",".join(map(str, r.values)), axis=1)
+        .value_counts()
+        .to_dict()
+    )
+
+    return {"positions": position_results, "sequence_counts": seq_counts}
 
 
 def main():
@@ -168,17 +183,18 @@ def main():
                 results[pop] = fut.result()
             except Exception as exc:
                 results[pop] = {"error": str(exc)}
-    for pop, samples in sorted(results.items()):
-        if "error" in samples:
-            print(f"{pop}: error {samples['error']}")
+    for pop, data in sorted(results.items()):
+        if "error" in data:
+            print(f"{pop}: error {data['error']}")
             continue
-        for sample, data in sorted(samples.items()):
-            if "error" in data:
-                print(f"{pop}/{sample}: error {data['error']}")
+        for pos, pdata in sorted(data["positions"].items()):
+            if "error" in pdata:
+                print(f"{pop}/{pos}: error {pdata['error']}")
             else:
                 print(
-                    f"{pop}/{sample}: best distribution {data['distribution']} using {data['values']} values; plot -> {data['plot']}"
+                    f"{pop}/{pos}: best distribution {pdata['distribution']} using {pdata['values']} samples; plot -> {pdata['plot']}"
                 )
+        print(f"{pop}: {len(data['sequence_counts'])} unique genotype sequences")
     summary_path = outdir / "distribution_summary.json"
     with summary_path.open("w") as fh:
         json.dump(results, fh, indent=2)
