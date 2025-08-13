@@ -79,6 +79,7 @@ def fit_distributions(values: np.ndarray):
     )
     # Normal
     mu, sigma = stats.norm.fit(values)
+    sigma = max(sigma, 1e-6)
     candidates["normal"] = (
         stats.norm(loc=mu, scale=sigma),
         {"loc": float(mu), "scale": float(sigma)},
@@ -94,6 +95,7 @@ def fit_distributions(values: np.ndarray):
     )
     # Exponential
     loc, scale = stats.expon.fit(values, floc=0)
+    scale = max(scale, 1e-6)
     candidates["exponential"] = (
         stats.expon(loc=loc, scale=scale),
         {"loc": float(loc), "scale": float(scale)},
