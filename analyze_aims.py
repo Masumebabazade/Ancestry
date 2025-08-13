@@ -120,7 +120,7 @@ def analyze_population(pop: str, labels: pd.DataFrame, aims: pd.DataFrame, genot
     position_results = {}
     for _, row in geno.iterrows():
         position = row["pos"]
-        vals = row[samples].values
+        vals = pd.to_numeric(row[samples], errors="coerce").to_numpy()
         vals = vals[~np.isnan(vals)]
         if vals.size == 0:
             position_results[position] = {"error": "no genotype values"}
