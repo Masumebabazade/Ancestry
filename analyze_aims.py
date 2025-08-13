@@ -3,11 +3,13 @@
 
 This script loads genotype data, AIM positions, and sample labels to
 identify the best-fitting statistical distribution for the genotype values
-observed across all *samples* in a population at each ancestry-informative
-marker (AIM) position.  In addition to per-position fits, the script
-records the empirical frequency of complete genotype sequences for the
-population, which can be used to synthesise new samples or estimate the
-probability of existing ones.
+observed across all *samples* in a population considering *all* of that
+population's ancestry-informative marker (AIM) positions together.  Rather
+than fitting a separate distribution per marker, all genotype values for a
+population are pooled and evaluated collectively.  The script also records
+the empirical frequency of complete genotype sequences for the population,
+which can be used to synthesise new samples or estimate the probability of
+existing ones.
 
 Usage example:
     python analyze_aims.py --genotypes head_train_samples.csv --aims G_const_infs.csv --labels train1.labels
@@ -119,37 +121,30 @@ def analyze_population(pop: str, labels: pd.DataFrame, aims: pd.DataFrame, genot
     pop_outdir = outdir / pop
     pop_outdir.mkdir(parents=True, exist_ok=True)
 
-    position_results = {}
-    for _, row in geno.iterrows():
-        position = row["pos"]
-        vals = pd.to_numeric(row[samples], errors="coerce").to_numpy()
-        vals = vals[~np.isnan(vals)]
-        if vals.size == 0:
-            position_results[position] = {"error": "no genotype values"}
-            continue
-        best_name, dist_obj, params = fit_distributions(vals)
-        fig, ax = plt.subplots()
-        bins = np.arange(vals.min(), vals.max() + 2) - 0.5
-        ax.hist(vals, bins=bins, density=True, alpha=0.6, label="data")
-        if isinstance(dist_obj.dist, stats.rv_discrete):
-            xk = np.arange(vals.min(), vals.max() + 1)
-            ax.plot(xk, dist_obj.pmf(xk), "r-", label=f"{best_name} fit")
-        else:
-            x = np.linspace(vals.min(), vals.max(), 100)
-            ax.plot(x, dist_obj.pdf(x), "r-", label=f"{best_name} fit")
-        ax.set_title(f"{pop} {position} genotype distribution")
-        ax.set_xlabel("Genotype value")
-        ax.set_ylabel("Density")
-        ax.legend()
-        plot_path = pop_outdir / f"{position}_distribution.png"
-        fig.savefig(plot_path)
-        plt.close(fig)
-        position_results[position] = {
-            "distribution": best_name,
-            "params": params,
-            "plot": str(plot_path),
-            "values": int(vals.size),
-        }
+    # Pool genotype values across all AIM positions and samples.
+    values = pd.to_numeric(geno[samples], errors="coerce").to_numpy().ravel()
+    values = values[~np.isnan(values)]
+    if values.size == 0:
+        raise ValueError("no genotype values to fit")
+
+    best_name, dist_obj, params = fit_distributions(values)
+
+    fig, ax = plt.subplots()
+    bins = np.arange(values.min(), values.max() + 2) - 0.5
+    ax.hist(values, bins=bins, density=True, alpha=0.6, label="data")
+    if isinstance(dist_obj.dist, stats.rv_discrete):
+        xk = np.arange(values.min(), values.max() + 1)
+        ax.plot(xk, dist_obj.pmf(xk), "r-", label=f"{best_name} fit")
+    else:
+        x = np.linspace(values.min(), values.max(), 100)
+        ax.plot(x, dist_obj.pdf(x), "r-", label=f"{best_name} fit")
+    ax.set_title(f"{pop} genotype distribution across AIMs")
+    ax.set_xlabel("Genotype value")
+    ax.set_ylabel("Density")
+    ax.legend()
+    plot_path = pop_outdir / "aggregate_distribution.png"
+    fig.savefig(plot_path)
+    plt.close(fig)
 
     # Build genotype sequence distribution for the population.
     sample_vectors = geno.set_index("pos")[samples].T
@@ -159,7 +154,13 @@ def analyze_population(pop: str, labels: pd.DataFrame, aims: pd.DataFrame, genot
         .to_dict()
     )
 
-    return {"positions": position_results, "sequence_counts": seq_counts}
+    return {
+        "distribution": best_name,
+        "params": params,
+        "plot": str(plot_path),
+        "values": int(values.size),
+        "sequence_counts": seq_counts,
+    }
 
 
 def main():
@@ -189,13 +190,9 @@ def main():
         if "error" in data:
             print(f"{pop}: error {data['error']}")
             continue
-        for pos, pdata in sorted(data["positions"].items()):
-            if "error" in pdata:
-                print(f"{pop}/{pos}: error {pdata['error']}")
-            else:
-                print(
-                    f"{pop}/{pos}: best distribution {pdata['distribution']} using {pdata['values']} samples; plot -> {pdata['plot']}"
-                )
+        print(
+            f"{pop}: best distribution {data['distribution']} using {data['values']} samples; plot -> {data['plot']}"
+        )
         print(f"{pop}: {len(data['sequence_counts'])} unique genotype sequences")
     summary_path = outdir / "distribution_summary.json"
     with summary_path.open("w") as fh:
