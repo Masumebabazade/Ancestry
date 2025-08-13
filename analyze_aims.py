@@ -35,6 +35,8 @@ def load_aims(aim_file: str, mapping):
 
 def fit_distributions(values: np.ndarray):
     """Fit several candidate distributions and return best name and scipy dist."""
+    if values.size == 0:
+        raise ValueError("no genotype values to fit")
     values = values.astype(float)
     # Candidate distributions
     candidates = {}
@@ -49,7 +51,8 @@ def fit_distributions(values: np.ndarray):
     candidates["normal"] = (stats.norm(loc=mu, scale=sigma), stats.norm.logpdf(values, mu, sigma).sum())
     # Uniform
     a, b = values.min(), values.max()
-    candidates["uniform"] = (stats.uniform(loc=a, scale=b - a), stats.uniform.logpdf(values, a, b - a).sum())
+    scale = max(b - a, 1e-6)
+    candidates["uniform"] = (stats.uniform(loc=a, scale=scale), stats.uniform.logpdf(values, a, scale).sum())
     # Exponential
     loc, scale = stats.expon.fit(values, floc=0)
     candidates["exponential"] = (stats.expon(loc=loc, scale=scale), stats.expon.logpdf(values, loc, scale).sum())
@@ -63,8 +66,12 @@ def analyze_population(pop: str, labels: pd.DataFrame, aims: pd.DataFrame, genot
     usecols = ["pos"] + samples
     geno = pd.read_csv(genotypes, sep="\t", usecols=lambda c: c in usecols)
     geno = geno[geno["pos"].isin(pop_positions)]
+    if geno.empty:
+        raise ValueError("no genotype data for population")
     values = geno[samples].values.ravel()
     values = values[~np.isnan(values)]
+    if values.size == 0:
+        raise ValueError("no genotype values for population")
     (best_name, (dist_obj, _)) = fit_distributions(values)
     # Plot histogram and fitted distribution
     outdir.mkdir(parents=True, exist_ok=True)
