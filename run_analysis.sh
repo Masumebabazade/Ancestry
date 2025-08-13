@@ -5,7 +5,7 @@ set -euo pipefail
 GENO=${1:-head_train_samples.csv}
 AIMS=${2:-G_const_infs.csv}
 LABELS=${3:-train1.labels}
-POP=${4:-ESN}
+POP=${4:-PEL}
 OUTDIR=${5:-analysis_plots}
 THREADS=${6:-$(nproc)}
 

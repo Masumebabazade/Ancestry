@@ -18,17 +18,35 @@ from scipy import stats
 import matplotlib.pyplot as plt
 
 
+EXPECTED_POPS = [
+    "ACB", "ASW", "BEB", "CDX", "CEU", "CHB", "CHS", "CLM",
+    "ESN", "FIN", "GBR", "GIH", "GWD", "IBS", "ITU", "JPT",
+    "KHV", "LWK", "MSL", "MXL", "PEL", "PJL", "PUR", "STU",
+    "TSI", "YRI",
+]
+
+
 def build_pop_mapping(labels_file: str):
-    """Return (labels_df, mapping from P(Gi) to population)."""
-    labels = pd.read_csv(labels_file, sep=" ", names=["sample", "pop"])
+    """Return (labels_df, mapping from P(Gi) to population).
+
+    The mapping aligns AIM population codes P(G0) .. P(G25) with the
+    alphabetically sorted populations from the training labels.
+    """
+    labels = pd.read_csv(labels_file, sep="\t", names=["sample", "pop"])
     pops = sorted(labels["pop"].unique())
+    if pops != EXPECTED_POPS:
+        raise ValueError("labels populations do not match expected order")
     mapping = {f"P(G{i})": pop for i, pop in enumerate(pops)}
     return labels, mapping
 
 
 def load_aims(aim_file: str, mapping):
     aims = pd.read_csv(aim_file)
-    aims["pop"] = aims["pop"].map(mapping)
+    pop_codes = aims["pop"]
+    aims["pop"] = pop_codes.map(mapping)
+    if aims["pop"].isnull().any():
+        unknown = pop_codes[aims["pop"].isnull()].unique()
+        raise ValueError(f"unknown AIM population codes: {unknown}")
     aims["pos"] = aims["chromosome"].str.replace("chr", "", regex=False) + "_" + aims["position"].astype(str)
     return aims
 
