@@ -6,11 +6,13 @@ identify the best-fitting statistical distribution for genotype values of
 specific populations at their ancestry-informative markers (AIMs).
 
 Usage example:
-    python analyze_aims.py --genotypes head_train_samples.csv --aims G_const_infs.csv --labels train1.labels --population ESN
+    python analyze_aims.py --genotypes head_train_samples.csv --aims G_const_infs.csv --labels train1.labels
+    # optionally add --population ESN to limit the analysis to a single group
 """
 import argparse
 import concurrent.futures as cf
 from pathlib import Path
+import json
 
 import numpy as np
 import pandas as pd
@@ -52,30 +54,50 @@ def load_aims(aim_file: str, mapping):
 
 
 def fit_distributions(values: np.ndarray):
-    """Fit several candidate distributions and return best name and scipy dist."""
+    """Fit candidate distributions and return best name, scipy dist, and parameters."""
     if values.size == 0:
         raise ValueError("no genotype values to fit")
     values = values.astype(float)
-    # Candidate distributions
     candidates = {}
     # Binomial (n=2)
     p = np.clip(values.mean() / 2, 1e-6, 1 - 1e-6)
-    candidates["binomial"] = (stats.binom(n=2, p=p), stats.binom.logpmf(values, 2, p).sum())
+    candidates["binomial"] = (
+        stats.binom(n=2, p=p),
+        {"n": 2, "p": float(p)},
+        stats.binom.logpmf(values, 2, p).sum(),
+    )
     # Poisson
     lam = values.mean()
-    candidates["poisson"] = (stats.poisson(mu=lam), stats.poisson.logpmf(values, lam).sum())
+    candidates["poisson"] = (
+        stats.poisson(mu=lam),
+        {"mu": float(lam)},
+        stats.poisson.logpmf(values, lam).sum(),
+    )
     # Normal
     mu, sigma = stats.norm.fit(values)
-    candidates["normal"] = (stats.norm(loc=mu, scale=sigma), stats.norm.logpdf(values, mu, sigma).sum())
+    candidates["normal"] = (
+        stats.norm(loc=mu, scale=sigma),
+        {"loc": float(mu), "scale": float(sigma)},
+        stats.norm.logpdf(values, mu, sigma).sum(),
+    )
     # Uniform
     a, b = values.min(), values.max()
     scale = max(b - a, 1e-6)
-    candidates["uniform"] = (stats.uniform(loc=a, scale=scale), stats.uniform.logpdf(values, a, scale).sum())
+    candidates["uniform"] = (
+        stats.uniform(loc=a, scale=scale),
+        {"loc": float(a), "scale": float(scale)},
+        stats.uniform.logpdf(values, a, scale).sum(),
+    )
     # Exponential
     loc, scale = stats.expon.fit(values, floc=0)
-    candidates["exponential"] = (stats.expon(loc=loc, scale=scale), stats.expon.logpdf(values, loc, scale).sum())
+    candidates["exponential"] = (
+        stats.expon(loc=loc, scale=scale),
+        {"loc": float(loc), "scale": float(scale)},
+        stats.expon.logpdf(values, loc, scale).sum(),
+    )
     # Select best by log-likelihood
-    return max(candidates.items(), key=lambda kv: kv[1][1])
+    best_name, (dist_obj, params, _) = max(candidates.items(), key=lambda kv: kv[1][2])
+    return best_name, dist_obj, params
 
 
 def analyze_population(pop: str, labels: pd.DataFrame, aims: pd.DataFrame, genotypes: str, outdir: Path):
@@ -90,7 +112,7 @@ def analyze_population(pop: str, labels: pd.DataFrame, aims: pd.DataFrame, genot
     values = values[~np.isnan(values)]
     if values.size == 0:
         raise ValueError("no genotype values for population")
-    (best_name, (dist_obj, _)) = fit_distributions(values)
+    best_name, dist_obj, params = fit_distributions(values)
     # Plot histogram and fitted distribution
     outdir.mkdir(parents=True, exist_ok=True)
     plt.figure()
@@ -109,7 +131,7 @@ def analyze_population(pop: str, labels: pd.DataFrame, aims: pd.DataFrame, genot
     plot_path = outdir / f"{pop}_distribution.png"
     plt.savefig(plot_path)
     plt.close()
-    return best_name, plot_path, len(values)
+    return best_name, params, plot_path, len(values)
 
 
 def main():
@@ -132,15 +154,26 @@ def main():
         for fut in cf.as_completed(futs):
             pop = futs[fut]
             try:
-                dist, plot_path, n = fut.result()
-                results[pop] = (dist, plot_path, n)
+                dist, params, plot_path, n = fut.result()
+                results[pop] = {
+                    "distribution": dist,
+                    "params": params,
+                    "plot": str(plot_path),
+                    "values": n,
+                }
             except Exception as exc:
-                results[pop] = ("error", Path(str(exc)), 0)
-    for pop, (dist, plot_path, n) in sorted(results.items()):
-        if dist == "error":
-            print(f"{pop}: error {plot_path}")
+                results[pop] = {"error": str(exc)}
+    for pop, data in sorted(results.items()):
+        if "error" in data:
+            print(f"{pop}: error {data['error']}")
         else:
-            print(f"{pop}: best distribution {dist} using {n} values; plot -> {plot_path}")
+            print(
+                f"{pop}: best distribution {data['distribution']} using {data['values']} values; plot -> {data['plot']}"
+            )
+    summary_path = outdir / "distribution_summary.json"
+    with summary_path.open("w") as fh:
+        json.dump(results, fh, indent=2)
+    print(f"summary JSON -> {summary_path}")
 
 
 if __name__ == "__main__":
