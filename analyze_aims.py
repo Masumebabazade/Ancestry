@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Analyze genotype distributions for population-specific AIM positions.
+"""Analyze per-sample genotype distributions for population-specific AIM positions.
 
 This script loads genotype data, AIM positions, and sample labels to
 identify the best-fitting statistical distribution for genotype values of
-specific populations at their ancestry-informative markers (AIMs).
+each sample in specific populations at their ancestry-informative markers (AIMs).
 
 Usage example:
     python analyze_aims.py --genotypes head_train_samples.csv --aims G_const_infs.csv --labels train1.labels
@@ -101,6 +101,7 @@ def fit_distributions(values: np.ndarray):
 
 
 def analyze_population(pop: str, labels: pd.DataFrame, aims: pd.DataFrame, genotypes: str, outdir: Path):
+    """Analyze genotype distributions for all samples belonging to a population."""
     samples = labels.loc[labels["pop"] == pop, "sample"].tolist()
     pop_positions = aims.loc[aims["pop"] == pop, "pos"].tolist()
     usecols = ["pos"] + samples
@@ -108,30 +109,40 @@ def analyze_population(pop: str, labels: pd.DataFrame, aims: pd.DataFrame, genot
     geno = geno[geno["pos"].isin(pop_positions)]
     if geno.empty:
         raise ValueError("no genotype data for population")
-    values = geno[samples].values.ravel()
-    values = values[~np.isnan(values)]
-    if values.size == 0:
-        raise ValueError("no genotype values for population")
-    best_name, dist_obj, params = fit_distributions(values)
-    # Plot histogram and fitted distribution
-    outdir.mkdir(parents=True, exist_ok=True)
-    fig, ax = plt.subplots()
-    bins = np.arange(values.min(), values.max() + 2) - 0.5
-    ax.hist(values, bins=bins, density=True, alpha=0.6, label="data")
-    if isinstance(dist_obj.dist, stats.rv_discrete):
-        xk = np.arange(values.min(), values.max() + 1)
-        ax.plot(xk, dist_obj.pmf(xk), "r-", label=f"{best_name} fit")
-    else:
-        x = np.linspace(values.min(), values.max(), 100)
-        ax.plot(x, dist_obj.pdf(x), "r-", label=f"{best_name} fit")
-    ax.set_title(f"{pop} genotype distribution")
-    ax.set_xlabel("Genotype value")
-    ax.set_ylabel("Density")
-    ax.legend()
-    plot_path = outdir / f"{pop}_distribution.png"
-    fig.savefig(plot_path)
-    plt.close(fig)
-    return best_name, params, plot_path, len(values)
+
+    pop_outdir = outdir / pop
+    pop_outdir.mkdir(parents=True, exist_ok=True)
+    sample_results = {}
+    for sample in samples:
+        vals = geno[sample].values
+        vals = vals[~np.isnan(vals)]
+        if vals.size == 0:
+            sample_results[sample] = {"error": "no genotype values"}
+            continue
+        best_name, dist_obj, params = fit_distributions(vals)
+        fig, ax = plt.subplots()
+        bins = np.arange(vals.min(), vals.max() + 2) - 0.5
+        ax.hist(vals, bins=bins, density=True, alpha=0.6, label="data")
+        if isinstance(dist_obj.dist, stats.rv_discrete):
+            xk = np.arange(vals.min(), vals.max() + 1)
+            ax.plot(xk, dist_obj.pmf(xk), "r-", label=f"{best_name} fit")
+        else:
+            x = np.linspace(vals.min(), vals.max(), 100)
+            ax.plot(x, dist_obj.pdf(x), "r-", label=f"{best_name} fit")
+        ax.set_title(f"{pop} {sample} genotype distribution")
+        ax.set_xlabel("Genotype value")
+        ax.set_ylabel("Density")
+        ax.legend()
+        plot_path = pop_outdir / f"{sample}_distribution.png"
+        fig.savefig(plot_path)
+        plt.close(fig)
+        sample_results[sample] = {
+            "distribution": best_name,
+            "params": params,
+            "plot": str(plot_path),
+            "values": len(vals),
+        }
+    return sample_results
 
 
 def main():
@@ -154,22 +165,20 @@ def main():
         for fut in cf.as_completed(futs):
             pop = futs[fut]
             try:
-                dist, params, plot_path, n = fut.result()
-                results[pop] = {
-                    "distribution": dist,
-                    "params": params,
-                    "plot": str(plot_path),
-                    "values": n,
-                }
+                results[pop] = fut.result()
             except Exception as exc:
                 results[pop] = {"error": str(exc)}
-    for pop, data in sorted(results.items()):
-        if "error" in data:
-            print(f"{pop}: error {data['error']}")
-        else:
-            print(
-                f"{pop}: best distribution {data['distribution']} using {data['values']} values; plot -> {data['plot']}"
-            )
+    for pop, samples in sorted(results.items()):
+        if "error" in samples:
+            print(f"{pop}: error {samples['error']}")
+            continue
+        for sample, data in sorted(samples.items()):
+            if "error" in data:
+                print(f"{pop}/{sample}: error {data['error']}")
+            else:
+                print(
+                    f"{pop}/{sample}: best distribution {data['distribution']} using {data['values']} values; plot -> {data['plot']}"
+                )
     summary_path = outdir / "distribution_summary.json"
     with summary_path.open("w") as fh:
         json.dump(results, fh, indent=2)
